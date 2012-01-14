@@ -2,7 +2,7 @@
  *  Guess LEDs
  *
  *  Tomas Szaniszlo, UCO 359894
- *  xszanisz@fi.muni.cz
+ *  xszanisz()fi.muni.cz
  *
  *  A simple game where the objective is to guess which LEDs were lit up for a brief moment.
  *  Guessed and total attempts are displayed on hex display.
