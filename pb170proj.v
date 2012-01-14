@@ -16,15 +16,15 @@ module pb170proj (
 
 	/* clock divider module */
 	clk_div divider1 (
-		.cntr(CNTR), .CLK(CLK), .RST(rst), .CLK_DIV(clk_div)
+		.cntr(cntr), .CLK(CLK), .RST(RST), .CLK_DIV(clk_div)
 	);
 	defparam divider1.divider = 2_000_000;
 
 
 	/* Input and output ports, registers and assignments */
 	input CLK;
-	input	[1:0] KEY;
-	input	[15:0] SW;
+	input [1:0] KEY;
+	input [15:0] SW;
 	output [4:0] LEDG;
 	output [15:0] LEDR;
 	output [6:0] HEX4;
@@ -33,9 +33,9 @@ module pb170proj (
 	output [6:0] HEX7;
 
 	wire clk_div;
-	wire rst;
+	wire RST;
 
-	reg [31:0] CNTR;
+	reg [31:0] cntr;
 	reg [15:0] LEDS;
 	reg [4:0] LEDZ;
 	reg [19:0] rnd;
@@ -53,13 +53,18 @@ module pb170proj (
 	reg [15:0] ledscfg;
 	reg [2:0] mode;
 	reg [15:0] cntdwn;
+	reg [15:0] cnt_m1;
+	reg [15:0] cnt_m2;
+	reg [15:0] cnt_m4a;
+	reg [15:0] cnt_m4b;
 	reg [3:0] rounds_ok;
 	reg [3:0] rounds;
+	reg [3:0] max_rounds;
 	reg old_key1;
 
 	assign LEDR = LEDS;
 	assign LEDG = LEDZ;
-	assign rst = KEY[0];
+	assign RST = KEY[0];
 
 
 	/**
@@ -89,12 +94,26 @@ module pb170proj (
 			HX4 <= hex;
 	end
 	endtask
-	
-	
+
+
+	/* initialisation */
 	initial
 	begin
+		/* turn off unnecessary hex displays */
 		HX7 <= 7'b1111111;
 		HX5 <= 7'b1111111;
+
+		max_rounds = 4'd8;
+
+		/* set time spent in various modes */
+		/* how long are the LEDs displayed */
+		cnt_m1 = 16'd5;
+		/* how much time has the user to answer */
+		cnt_m2 = 16'd500;
+		/* how long should the correct answer be displayed if user failed */
+		cnt_m4a = 16'd96;
+		/* how long should the correct answer be displayed if user passed */
+		cnt_m4b = 16'd48;
 	end
 
 
@@ -102,7 +121,7 @@ module pb170proj (
 	always @(posedge CLK)
 	begin
 
-		/* is KEY[0] pressed */
+		/* is KEY[0] pressed? */
 		if (KEY[0] == 0)
 		begin
 			mode = 0;
@@ -111,14 +130,17 @@ module pb170proj (
 			old_key1 = 0;
 		end
 
-		
+
 		/* detect KEY[1] negedge */
 		if (KEY[1] == 0 && old_key1 == 1)
 		begin
 			case (mode)
 			0:
 			begin
-				rnd = CNTR[19:0];
+				/* get randomness from the clock transitions counter;
+				 * with 20 bits and clock divider 20M for UI it can be
+				 * considered fairly random */
+				rnd = cntr[19:0];
 				mode = 1;
 			end
 			2:
@@ -128,33 +150,37 @@ module pb170proj (
 			endcase
 		end
 		old_key1 = KEY[1];
-		
+
 
 		if (clk_div)
 		begin
 			case (mode)
 			
+			/* nothing to do... waiting for user to press KEY[1];
+			 * this mode is used to get some randomness from the delay
+			 * between entering it and the user pressing KEY[1] */
 			0:
 			begin
-				/* nothing to do... waiting for user to press KEY[1] */
-				cntdwn = 5;
+				/* prepare counter for mode 1 */
+				cntdwn = cnt_m1;
 			end
 			
+			/* user pressed KEY[1], show random LEDs for a short time */
 			1:
 			begin
-				/* user pressed KEY[1], showing random LEDs for a short time */
 				case (cntdwn)
 				0:
 				begin
 					/* time has run up, let him guess */
 					LEDS <= 0;
+					cntdwn = cnt_m2;
 					mode = 2;
-					cntdwn = 500;
 				end
-				5:
+				cnt_m1:
 				begin
-					/* start showing LEDs */
-					ledscfg = (16'b1 << rnd[3:0]) | (16'b1 << rnd[7:4]) | (16'b1 << rnd[11:8]) | (16'b1 << rnd[15:12]); // | (16'b1 << rnd[19:16]);
+					/* start showing LEDs; a combination of 1-5 LEDs is shown;
+					 * five random (possibly overlaping) positions 0-15 are chosen */
+					ledscfg = (16'b1 << rnd[3:0]) | (16'b1 << rnd[7:4]) | (16'b1 << rnd[11:8]) | (16'b1 << rnd[15:12]) | (16'b1 << rnd[19:16]);
 					LEDS <= ledscfg;
 					cntdwn = cntdwn - 16'b1;
 				end
@@ -166,9 +192,9 @@ module pb170proj (
 				endcase
 			end
 
+			/* user is trying to guess which LEDs lit */
 			2:
 			begin
-				/* user is trying to guess which LEDs lit */
 				if (cntdwn == 0)
 				begin
 					/* time has run up, go to evaluation phase */
@@ -181,29 +207,38 @@ module pb170proj (
 				end
 			end
 
+			/* user pressed KEY[1], he thinks he got his guess right, evaluate */
 			3:
 			begin
-				/* user pressed KEY[1], he thinks he got his guess right, evaluate */
-				cntdwn = 96;
+				cntdwn = cnt_m4a;
 				if (SW[15:0] == ledscfg)
 				begin
+					/* guess correct */
 					rounds_ok = rounds_ok + 4'b1;
-					cntdwn = 48;
+					cntdwn = cnt_m4b;
 				end
 				rounds = rounds + 4'b1;
+
+				/* update score */
+				showhex(0, rounds_ok);
+				showhex(1, rounds);
+
 				mode = 4;
 			end
 
+			/* show him the answer */
 			4:
 			begin
-				/* show him the answer */
+				/* blink the correct answer */
 				LEDS <= cntdwn[2] ? ledscfg : 16'b0;
+
 				if (cntdwn == 0)
 				begin
-					if (rounds == 5)
+					if (rounds == max_rounds)
 					begin
-						mode = 5;
+						/* the end of the game */
 						LEDS <= 16'b1;
+						mode = 5;
 					end
 					else
 					begin
@@ -213,22 +248,23 @@ module pb170proj (
 				cntdwn = cntdwn - 16'b1;
 			end
 			
+			/* the end, final mode; only reset signal can escape from it */
 			5:
 			begin
-				/* the end, final mode; only reset can exit from it */
-				cntdwn = cntdwn + 16'b1;
+				/* some random effect */
+				// cntdwn = cntdwn + 16'b1;
 				// LEDS <= (cntdwn[3] == 0) ? 16'hffff : 16'h0000;
 				LEDS <= (LEDS[14:0] << 1) | LEDS[15];
 			end
 
 			endcase
+
+			/* display current mode */
 			LEDZ <= (5'b1 << mode);
 
 		end
 
-		showhex(0, rounds_ok);
-		showhex(1, rounds);
-		
 	end
 
 endmodule
+
